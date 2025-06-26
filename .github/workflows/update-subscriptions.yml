@@ -1,0 +1,24 @@
+name: Update subscriptions from Lemon Squeezy
+
+on:
+  repository_dispatch:
+    types: [order_created]   # Debe coincidir con el webhook
+
+permissions:
+  contents: write           # Necesario para commitear el JSON
+  pages: write              # Actualiza la página si lo necesitas
+
+jobs:
+  update-json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update subscription file
+        run: |
+          echo "$PAYLOAD" > subscriptions.json   # Ejemplo simple
+        env:
+          PAYLOAD: ${{ toJson(github.event.client_payload) }}
+      - name: Commit & push
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update subscriptions.json"
