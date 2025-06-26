@@ -26,6 +26,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify Lemon Squeezy signature
+        run: |
+          # 1) Cargar el payload crudo
+          PAYLOAD=$(cat "$GITHUB_EVENT_PATH")
+
+          # 2) Leer la firma que reenviamos desde el relay
+          SIG_HEADER=$(echo "$PAYLOAD" | jq -r '.client_payload.headers["x-signature"]')
+
+          # 3) Recalcular HMAC-SHA256 con el mismo secreto
+          COMPUTED=$(printf '%s' "$PAYLOAD" \
+                     | openssl dgst -sha256 -hmac "$SIGNING_SECRET" \
+                     | cut -d " " -f2)
+
+          echo "Firma recibida:  $SIG_HEADER"
+          echo "Firma calculada: $COMPUTED"
+
+          # 4) Comparar
+          if [ "$SIG_HEADER" = "$COMPUTED" ]; then
+            echo "✅ Signature valid"
+          else
+            echo "❌ Bad signature"
+            exit 1
+          fi
+        env:
+          SIGNING_SECRET: ${{ secrets.LS_SIGNING_SECRET }}
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
