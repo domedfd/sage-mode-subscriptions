@@ -1,24 +1,134 @@
-name: Update subscriptions from Lemon Squeezy
+name: Update Subscriptions
 
 on:
   repository_dispatch:
-    types: [order_created]   # Debe coincidir con el webhook
-
-permissions:
-  contents: write           # Necesario para commitear el JSON
-  pages: write              # Actualiza la página si lo necesitas
+    types: [subscription_updated]
+  workflow_dispatch:
+    inputs:
+      device_id:
+        description: 'Device ID to update'
+        required: true
+      action:
+        description: 'Action to perform (add/update/cancel)'
+        required: true
+        default: 'add'
+      order_id:
+        description: 'Lemon Squeezy Order ID'
+        required: false
+      email:
+        description: 'Customer email'
+        required: false
 
 jobs:
-  update-json:
+  update-subscriptions:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Update subscription file
-        run: |
-          echo "$PAYLOAD" > subscriptions.json   # Ejemplo simple
-        env:
-          PAYLOAD: ${{ toJson(github.event.client_payload) }}
-      - name: Commit & push
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          commit_message: "Update subscriptions.json"
+          node-version: '18'
+
+      - name: Update subscriptions.json
+        run: |
+          # Crear directorio si no existe
+          mkdir -p subscriptions
+          
+          # Archivo de suscripciones
+          SUBSCRIPTIONS_FILE="subscriptions/subscriptions.json"
+          
+          # Crear archivo si no existe
+          if [ ! -f "$SUBSCRIPTIONS_FILE" ]; then
+            echo '{
+              "subscriptions": {},
+              "lastUpdated": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+              "totalSubscriptions": 0,
+              "activeSubscriptions": 0,
+              "version": "1.0"
+            }' > "$SUBSCRIPTIONS_FILE"
+          fi
+          
+          # Obtener datos del evento
+          DEVICE_ID="${{ github.event.client_payload.device_id || github.event.inputs.device_id }}"
+          ACTION="${{ github.event.client_payload.action || github.event.inputs.action }}"
+          ORDER_ID="${{ github.event.client_payload.order_id || github.event.inputs.order_id }}"
+          EMAIL="${{ github.event.client_payload.email || github.event.inputs.email }}"
+          
+          echo "Processing: Device ID=$DEVICE_ID, Action=$ACTION, Order ID=$ORDER_ID"
+          
+          # Actualizar suscripción usando Node.js
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            
+            const subscriptionsFile = '$SUBSCRIPTIONS_FILE';
+            const deviceId = '$DEVICE_ID';
+            const action = '$ACTION';
+            const orderId = '$ORDER_ID';
+            const email = '$EMAIL';
+            
+            // Leer archivo actual
+            let data = {};
+            if (fs.existsSync(subscriptionsFile)) {
+              data = JSON.parse(fs.readFileSync(subscriptionsFile, 'utf8'));
+            } else {
+              data = {
+                subscriptions: {},
+                lastUpdated: new Date().toISOString(),
+                totalSubscriptions: 0,
+                activeSubscriptions: 0,
+                version: '1.0'
+              };
+            }
+            
+            // Procesar acción
+            if (action === 'add' || action === 'update') {
+              // Calcular fecha de expiración (30 días desde ahora)
+              const expiresAt = new Date();
+              expiresAt.setDate(expiresAt.getDate() + 30);
+              
+              data.subscriptions[deviceId] = {
+                isPro: true,
+                expiresAt: expiresAt.toISOString(),
+                createdAt: new Date().toISOString(),
+                lemonSqueezyOrderId: orderId,
+                email: email,
+                plan: 'monthly',
+                price: 6.99
+              };
+              
+              console.log('Subscription added/updated for device:', deviceId);
+            } else if (action === 'cancel') {
+              if (data.subscriptions[deviceId]) {
+                data.subscriptions[deviceId].isPro = false;
+                data.subscriptions[deviceId].cancelled = true;
+                console.log('Subscription cancelled for device:', deviceId);
+              }
+            }
+            
+            // Actualizar contadores
+            data.lastUpdated = new Date().toISOString();
+            data.totalSubscriptions = Object.keys(data.subscriptions).length;
+            data.activeSubscriptions = Object.values(data.subscriptions).filter(sub => sub.isPro).length;
+            
+            // Escribir archivo actualizado
+            fs.writeFileSync(subscriptionsFile, JSON.stringify(data, null, 2));
+            console.log('Subscriptions file updated successfully');
+          "
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add subscriptions/subscriptions.json
+          git commit -m "Update subscription for device ${{ github.event.client_payload.device_id || github.event.inputs.device_id }}"
+          git push
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./subscriptions
+          destination_dir: subscriptions
